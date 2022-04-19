@@ -95,6 +95,7 @@ from airflow.api.common.mark_tasks import (
     set_dag_run_state_to_failed,
     set_dag_run_state_to_queued,
     set_dag_run_state_to_success,
+    set_state,
 )
 from airflow.compat.functools import cached_property
 from airflow.configuration import AIRFLOW_CONFIG, conf
@@ -107,6 +108,7 @@ from airflow.models import DAG, Connection, DagModel, DagTag, Log, SlaMiss, Task
 from airflow.models.abstractoperator import AbstractOperator
 from airflow.models.dagcode import DagCode
 from airflow.models.dagrun import DagRun, DagRunType
+from airflow.models.operator import Operator
 from airflow.models.serialized_dag import SerializedDagModel
 from airflow.models.taskinstance import TaskInstance
 from airflow.providers_manager import ProvidersManager
@@ -2284,28 +2286,28 @@ class Airflow(AirflowBaseView):
 
     def _mark_task_instance_state(
         self,
-        dag_id,
-        task_id,
-        origin,
-        dag_run_id,
-        upstream,
-        downstream,
-        future,
-        past,
-        state,
-        map_index=None,
+        *,
+        dag_id: str,
+        run_id: str,
+        task_id: str,
+        map_indexes: Optional[List[int]],
+        origin: str,
+        upstream: bool,
+        downstream: bool,
+        future: bool,
+        past: bool,
+        state: TaskInstanceState,
     ):
         dag = current_app.dag_bag.get_dag(dag_id)
-        latest_execution_date = dag.get_latest_execution_date()
 
-        if not latest_execution_date:
-            flash(f"Cannot mark tasks as {state}, seem that dag {dag_id} has never run", "error")
+        if not run_id:
+            flash(f"Cannot mark tasks as {state}, seem that DAG {dag_id} has never run", "error")
             return redirect(origin)
 
         altered = dag.set_task_instance_state(
             task_id=task_id,
-            map_index=map_index,
-            run_id=dag_run_id,
+            map_indexes=map_indexes,
+            run_id=run_id,
             state=state,
             upstream=upstream,
             downstream=downstream,
@@ -2332,7 +2334,11 @@ class Airflow(AirflowBaseView):
         dag_run_id = args.get('dag_run_id')
         state = args.get('state')
         origin = args.get('origin')
-        map_index = args.get('map_index')
+
+        if 'map_index' not in args:
+            map_indexes: Optional[List[int]] = None
+        else:
+            map_indexes = args.getlist('map_index', type=int)
 
         upstream = to_boolean(args.get('upstream'))
         downstream = to_boolean(args.get('downstream'))
@@ -2365,9 +2371,10 @@ class Airflow(AirflowBaseView):
             msg = f"Cannot mark tasks as {state}, seem that dag {dag_id} has never run"
             return redirect_or_json(origin, msg, status='error')
 
-        from airflow.api.common.mark_tasks import set_state
-
-        tasks = [(task, map_index)] if map_index else [task]
+        if map_indexes is None:
+            tasks: Union[List[Operator], List[Tuple[Operator, int]]] = [task]
+        else:
+            tasks = [(task, map_index) for map_index in map_indexes]
 
         to_be_altered = set_state(
             tasks=tasks,
@@ -2408,26 +2415,30 @@ class Airflow(AirflowBaseView):
         args = request.form
         dag_id = args.get('dag_id')
         task_id = args.get('task_id')
-        origin = get_safe_url(args.get('origin'))
-        dag_run_id = args.get('dag_run_id')
-        map_index = args.get('map_index')
+        run_id = args.get('dag_run_id')
 
+        if 'map_index' not in args:
+            map_indexes: Optional[List[int]] = None
+        else:
+            map_indexes = args.getlist('map_index', type=int)
+
+        origin = get_safe_url(args.get('origin'))
         upstream = to_boolean(args.get('upstream'))
         downstream = to_boolean(args.get('downstream'))
         future = to_boolean(args.get('future'))
         past = to_boolean(args.get('past'))
 
         return self._mark_task_instance_state(
-            dag_id,
-            task_id,
-            origin,
-            dag_run_id,
-            upstream,
-            downstream,
-            future,
-            past,
-            State.FAILED,
-            map_index=map_index,
+            dag_id=dag_id,
+            run_id=run_id,
+            task_id=task_id,
+            map_indexes=map_indexes,
+            origin=origin,
+            upstream=upstream,
+            downstream=downstream,
+            future=future,
+            past=past,
+            state=TaskInstanceState.FAILED,
         )
 
     @expose('/success', methods=['POST'])
@@ -2443,26 +2454,30 @@ class Airflow(AirflowBaseView):
         args = request.form
         dag_id = args.get('dag_id')
         task_id = args.get('task_id')
-        origin = get_safe_url(args.get('origin'))
-        dag_run_id = args.get('dag_run_id')
-        map_index = args.get('map_index')
+        run_id = args.get('dag_run_id')
 
+        if 'map_index' not in args:
+            map_indexes: Optional[List[int]] = None
+        else:
+            map_indexes = args.getlist('map_index', type=int)
+
+        origin = get_safe_url(args.get('origin'))
         upstream = to_boolean(args.get('upstream'))
         downstream = to_boolean(args.get('downstream'))
         future = to_boolean(args.get('future'))
         past = to_boolean(args.get('past'))
 
         return self._mark_task_instance_state(
-            dag_id,
-            task_id,
-            origin,
-            dag_run_id,
-            upstream,
-            downstream,
-            future,
-            past,
-            State.SUCCESS,
-            map_index=map_index,
+            dag_id=dag_id,
+            run_id=run_id,
+            task_id=task_id,
+            map_indexes=map_indexes,
+            origin=origin,
+            upstream=upstream,
+            downstream=downstream,
+            future=future,
+            past=past,
+            state=TaskInstanceState.SUCCESS,
         )
 
     @expose('/dags/<string:dag_id>')
